@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Plano interactivo para Minecraft</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        margin: 20px;
+      }
+      #controls {
+        margin-bottom: 10px;
+      }
+      #canvasContainer {
+        position: relative;
+        display: inline-block;
+        border: 1px solid #333;
+      }
+      canvas {
+        display: block;
+      }
+      /* Dropdown para opciones del click derecho */
+      #dropdown {
+        position: absolute;
+        display: none;
+        background: #fff;
+        border: 1px solid #333;
+        z-index: 10;
+      }
+      #dropdown div {
+        padding: 5px 10px;
+        cursor: pointer;
+      }
+      #dropdown div:hover {
+        background: #eee;
+      }
+      /* Modal para ingresar coordenadas manuales (sólo X e Y) */
+      #modalOverlay {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 20;
+        align-items: center;
+        justify-content: center;
+      }
+      #modal {
+        background: #fff;
+        padding: 20px;
+        border-radius: 5px;
+        min-width: 250px;
+      }
+      #modal input {
+        width: 60px;
+        margin: 5px;
+      }
+      /* Modal para solicitar la coordenada Z para exportar comandos */
+      #modalZOverlay {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 25;
+        align-items: center;
+        justify-content: center;
+      }
+      #modalZ {
+        background: #fff;
+        padding: 20px;
+        border-radius: 5px;
+        min-width: 250px;
+      }
+      #modalZ input {
+        width: 60px;
+        margin: 5px;
+      }
+      /* Tooltip */
+      #tooltip {
+        position: absolute;
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid #333;
+        padding: 2px 5px;
+        font-size: 12px;
+        pointer-events: none;
+        display: none;
+        z-index: 15;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="controls">
+      <input type="file" id="imageLoader" accept="image/*" />
+      <button id="cleanImage">Limpiar imagen</button>
+      <button id="toggleMap">Ocultar mapa</button>
+      <button id="zoomIn">Zoom In</button>
+      <button id="zoomOut">Zoom Out</button>
+      <button id="exportCoords">Exportar coordenadas</button>
+      <button id="exportCommands">Exportar comandos</button>
+      <button id="exportState">Exportar estado</button>
+      <button id="importState">Importar estado</button>
+      <input
+        type="file"
+        id="importStateFile"
+        accept="application/json"
+        style="display: none"
+      />
+      <br /><br />
+      <label
+        >Cuadros por lado:
+        <input type="number" id="gridSizeInput" value="300" min="50" />
+      </label>
+      <button id="changeGrid">Cambiar cuadrícula</button>
+      <br /><br />
+      <label
+        >Dirección de crecimiento:
+        <select id="growthSelect">
+          <option value="1,1" selected>1,1</option>
+          <option value="1,-1">1,-1</option>
+          <option value="-1,1">-1,1</option>
+          <option value="-1,-1">-1,-1</option>
+        </select>
+      </label>
+      <br /><br />
+      <label
+        >Modo de selección:
+        <select id="selectionMode">
+          <option value="uno" selected>Uno</option>
+          <option value="seguir">Seguir cursor</option>
+        </select>
+      </label>
+    </div>
+
+    <!-- Se reserva margen para los ejes (izquierda y abajo) -->
+    <div id="canvasContainer">
+      <canvas id="mainCanvas"></canvas>
+      <!-- Tooltip para mostrar coordenadas -->
+      <div id="tooltip"></div>
+    </div>
+
+    <!-- Dropdown para click derecho -->
+    <div id="dropdown">
+      <div id="setCoordsOption">Establecer coordenadas</div>
+    </div>
+
+    <!-- Modal para ingresar coordenadas manuales (sólo X e Y) -->
+    <div id="modalOverlay">
+      <div id="modal">
+        <h3>Establecer coordenadas</h3>
+        <label>X: <input type="number" id="coordX" /></label>
+        <label>Y: <input type="number" id="coordY" /></label>
+        <br />
+        <button id="saveCoords">Guardar</button>
+        <button id="cancelCoords">Cancelar</button>
+      </div>
+    </div>
+
+    <!-- Modal para solicitar la coordenada Z para exportar comandos -->
+    <div id="modalZOverlay">
+      <div id="modalZ">
+        <h3>Valor para Z</h3>
+        <label>Z: <input type="number" id="coordZExport" value="0" /></label>
+        <br />
+        <button id="saveZ">Exportar comandos</button>
+        <button id="cancelZ">Cancelar</button>
+      </div>
+    </div>
+
+    <script>
+      // Márgenes para ejes
+      const leftMargin = 40;
+      const bottomMargin = 40;
+
+      // Variables globales y de estado
+      const canvas = document.getElementById("mainCanvas");
+      const ctx = canvas.getContext("2d");
+      const imageLoader = document.getElementById("imageLoader");
+      const cleanImageBtn = document.getElementById("cleanImage");
+      const toggleMapBtn = document.getElementById("toggleMap");
+      const zoomInBtn = document.getElementById("zoomIn");
+      const zoomOutBtn = document.getElementById("zoomOut");
+      const exportCoordsBtn = document.getElementById("exportCoords");
+      const exportCommandsBtn = document.getElementById("exportCommands");
+      const exportStateBtn = document.getElementById("exportState");
+      const importStateBtn = document.getElementById("importState");
+      const importStateFile = document.getElementById("importStateFile");
+      const gridSizeInput = document.getElementById("gridSizeInput");
+      const changeGridBtn = document.getElementById("changeGrid");
+      const growthSelect = document.getElementById("growthSelect");
+      const selectionModeSelect = document.getElementById("selectionMode");
+      const dropdown = document.getElementById("dropdown");
+      const setCoordsOption = document.getElementById("setCoordsOption");
+      const modalOverlay = document.getElementById("modalOverlay");
+      const saveCoordsBtn = document.getElementById("saveCoords");
+      const cancelCoordsBtn = document.getElementById("cancelCoords");
+      const tooltip = document.getElementById("tooltip");
+      // Modal para solicitar Z en exportar comandos
+      const modalZOverlay = document.getElementById("modalZOverlay");
+      const saveZBtn = document.getElementById("saveZ");
+      const cancelZBtn = document.getElementById("cancelZ");
+      const coordZExport = document.getElementById("coordZExport");
+
+      // Variables de imagen y zoom
+      let img = new Image();
+      let imgLoaded = false;
+      let scale = 1;
+      let gridCells = parseInt(gridSizeInput.value) || 300;
+      let canvasSize = 300;
+      let showMap = true;
+
+      // Datos de celdas: { order, coords:{x,y}, manual }
+      let cellData = {};
+      let orderList = [];
+      let currentDropdownCell = null;
+
+      // Vector de crecimiento (por defecto 1,1)
+      let growthVector = { x: 1, y: 1 };
+
+      // Variable para modo de selección continua ("seguir cursor")
+      let isSelecting = false;
+
+      // Persistencia en localStorage (imagen no se incluye)
+      function saveImageToLocalStorage(dataURL) {
+        localStorage.setItem("minecraftMapImage", dataURL);
+      }
+      function saveState() {
+        const state = {
+          cellData,
+          gridCells,
+          showMap,
+          growthVector,
+        };
+        localStorage.setItem("minecraftMapState", JSON.stringify(state));
+      }
+      function loadState() {
+        const savedState = localStorage.getItem("minecraftMapState");
+        if (savedState) {
+          const state = JSON.parse(savedState);
+          cellData = state.cellData || {};
+          gridCells = state.gridCells || 300;
+          showMap = state.showMap !== undefined ? state.showMap : true;
+          growthVector = state.growthVector || { x: 1, y: 1 };
+          gridSizeInput.value = gridCells;
+          toggleMapBtn.textContent = showMap ? "Ocultar mapa" : "Mostrar mapa";
+          growthSelect.value = `${growthVector.x},${growthVector.y}`;
+        }
+      }
+
+      function loadImageFromLocalStorage() {
+        const dataURL = localStorage.getItem("minecraftMapImage");
+        imgLoaded = false;
+        if (dataURL) {
+          img.src = dataURL;
+        } else {
+          img.src = "map.png";
+        }
+      }
+      function clearImage() {
+        localStorage.removeItem("minecraftMapImage");
+        imgLoaded = false;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        cellData = {};
+        orderList = [];
+        saveState();
+      }
+
+      function updateCanvasSize() {
+        if (!imgLoaded) return;
+        canvasSize = img.width * scale;
+        canvas.width = canvasSize + leftMargin;
+        canvas.height = canvasSize + bottomMargin;
+        draw();
+      }
+
+      // Recalcula las coordenadas relativas (celdas sin seteo manual) usando la celda inferior izquierda
+      function recalcRelativeCoordinates() {
+        const bottomLeftKey = gridCells - 1 + "-0";
+        let refCoord = { x: 0, y: 0 };
+        if (cellData[bottomLeftKey] && cellData[bottomLeftKey].manual) {
+          refCoord = cellData[bottomLeftKey].coords;
+        }
+        for (let key in cellData) {
+          if (!cellData[key].manual) {
+            let [row, col] = key.split("-").map(Number);
+            cellData[key].coords = {
+              x: refCoord.x + growthVector.x * col,
+              y: refCoord.y + growthVector.y * (gridCells - 1 - row),
+            };
+          }
+        }
+        saveState();
+        draw();
+      }
+
+      function draw() {
+        ctx.fillStyle = "#ccffcc";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        if (imgLoaded && showMap) {
+          ctx.drawImage(img, leftMargin, 0, canvasSize, canvasSize);
+        }
+
+        const cellSize = canvasSize / gridCells;
+
+        ctx.strokeStyle = "rgba(0,0,0,0.2)";
+        ctx.lineWidth = 1.5;
+        for (let i = 0; i <= gridCells; i++) {
+          let pos = i * cellSize;
+          ctx.beginPath();
+          ctx.moveTo(leftMargin, pos);
+          ctx.lineTo(leftMargin + canvasSize, pos);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(leftMargin + pos, 0);
+          ctx.lineTo(leftMargin + pos, canvasSize);
+          ctx.stroke();
+        }
+
+        ctx.strokeStyle = "red";
+        ctx.lineWidth = 3;
+        for (let i = 0; i <= gridCells; i += 10) {
+          let pos = i * cellSize;
+          ctx.beginPath();
+          ctx.moveTo(leftMargin, pos);
+          ctx.lineTo(leftMargin + canvasSize, pos);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(leftMargin + pos, 0);
+          ctx.lineTo(leftMargin + pos, canvasSize);
+          ctx.stroke();
+        }
+
+        for (const key in cellData) {
+          const { order, coords } = cellData[key];
+          const [row, col] = key.split("-").map(Number);
+          const x = leftMargin + col * cellSize;
+          const y = row * cellSize;
+          ctx.fillStyle = "rgba(255,0,0,0.4)";
+          ctx.fillRect(x, y, cellSize, cellSize);
+          ctx.fillStyle = "#000";
+          ctx.font = `${cellSize * 0.5}px Arial`;
+          ctx.textAlign = "center";
+          ctx.textBaseline = "middle";
+          ctx.fillText(order, x + cellSize / 2, y + cellSize / 2);
+        }
+
+        ctx.fillStyle = "#000";
+        ctx.font = "12px Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        for (let i = 0; i <= gridCells; i += 10) {
+          let pos = leftMargin + i * cellSize;
+          ctx.fillText(i, pos, canvasSize + 5);
+        }
+        ctx.textAlign = "right";
+        ctx.textBaseline = "middle";
+        for (let i = 0; i <= gridCells; i += 10) {
+          let pos = canvasSize - i * cellSize;
+          ctx.fillText(i, leftMargin - 5, pos);
+        }
+      }
+
+      function recalcOrders() {
+        orderList = [];
+        const cells = Object.keys(cellData).map((key) => ({
+          key,
+          order: cellData[key].order,
+        }));
+        cells.sort((a, b) => a.order - b.order);
+        cells.forEach((item, index) => {
+          cellData[item.key].order = index + 1;
+          orderList.push(item.key);
+        });
+        saveState();
+      }
+
+      function getCellFromCoords(x, y) {
+        if (x < leftMargin || y > canvasSize) return null;
+        const cellSize = canvasSize / gridCells;
+        const col = Math.floor((x - leftMargin) / cellSize);
+        const row = Math.floor(y / cellSize);
+        return { row, col, cellSize };
+      }
+
+      imageLoader.addEventListener("change", function (e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function (event) {
+          img.src = event.target.result;
+          saveImageToLocalStorage(event.target.result);
+        };
+        reader.readAsDataURL(file);
+      });
+
+      img.onload = function () {
+        imgLoaded = true;
+        canvasSize = img.width;
+        canvas.width = canvasSize + leftMargin;
+        canvas.height = canvasSize + bottomMargin;
+        scale = 1;
+        draw();
+      };
+
+      loadState();
+      loadImageFromLocalStorage();
+
+      function zoomIn() {
+        scale *= 1.1;
+        updateCanvasSize();
+      }
+      function zoomOut() {
+        scale /= 1.1;
+        updateCanvasSize();
+      }
+      zoomInBtn.addEventListener("click", zoomIn);
+      zoomOutBtn.addEventListener("click", zoomOut);
+      canvas.addEventListener("wheel", function (e) {
+        if (e.ctrlKey) {
+          e.preventDefault();
+          e.deltaY < 0 ? zoomIn() : zoomOut();
+        }
+      });
+
+      cleanImageBtn.addEventListener("click", function () {
+        clearImage();
+        saveState();
+        draw();
+      });
+
+      changeGridBtn.addEventListener("click", function () {
+        const newSize = parseInt(gridSizeInput.value);
+        if (!newSize || newSize <= 0) {
+          alert("Por favor, ingrese un número válido mayor a 0.");
+          return;
+        }
+        gridCells = newSize;
+        cellData = {};
+        orderList = [];
+        saveState();
+        draw();
+      });
+
+      toggleMapBtn.addEventListener("click", function () {
+        showMap = !showMap;
+        toggleMapBtn.textContent = showMap ? "Ocultar mapa" : "Mostrar mapa";
+        saveState();
+        draw();
+      });
+
+      // Modo de selección según el select "selectionMode"
+      canvas.addEventListener("click", function (e) {
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        dropdown.style.display = "none";
+        const mode = selectionModeSelect.value;
+        const cell = getCellFromCoords(x, y);
+        if (!cell) return;
+        const { row, col } = cell;
+        const key = `${row}-${col}`;
+
+        if (mode === "seguir") {
+          if (!isSelecting) {
+            // Primer click: inicia selección continua y selecciona la celda si no estaba
+            isSelecting = true;
+            if (!cellData[key]) {
+              cellData[key] = {
+                order: Object.keys(cellData).length + 1,
+                coords: null,
+                manual: false,
+              };
+              orderList.push(key);
+              recalcRelativeCoordinates();
+            }
+          } else {
+            // Segundo click: termina la sesión de selección continua
+            isSelecting = false;
+            if (!cellData[key]) {
+              cellData[key] = {
+                order: Object.keys(cellData).length + 1,
+                coords: null,
+                manual: false,
+              };
+              orderList.push(key);
+              recalcRelativeCoordinates();
+            }
+          }
+          saveState();
+          draw();
+        } else {
+          // Modo "uno": comportamiento normal
+          if (cellData[key]) {
+            delete cellData[key];
+            recalcOrders();
+          } else {
+            cellData[key] = {
+              order: Object.keys(cellData).length + 1,
+              coords: null,
+              manual: false,
+            };
+            orderList.push(key);
+          }
+          recalcRelativeCoordinates();
+          saveState();
+          draw();
+        }
+      });
+
+      // En modo "seguir cursor", al mover el mouse se selecciona la celda si la sesión está activa
+      canvas.addEventListener("mousemove", function (e) {
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        if (selectionModeSelect.value === "seguir" && isSelecting) {
+          const cell = getCellFromCoords(x, y);
+          if (cell) {
+            const { row, col } = cell;
+            const key = `${row}-${col}`;
+            if (!cellData[key]) {
+              cellData[key] = {
+                order: Object.keys(cellData).length + 1,
+                coords: null,
+                manual: false,
+              };
+              orderList.push(key);
+              recalcRelativeCoordinates();
+              saveState();
+              draw();
+            }
+          }
+        }
+        // Tooltip
+        const cellForTooltip = getCellFromCoords(x, y);
+        if (!cellForTooltip) {
+          tooltip.style.display = "none";
+          return;
+        }
+        const { row, col, cellSize } = cellForTooltip;
+        const key = `${row}-${col}`;
+        if (cellData[key] && cellData[key].coords) {
+          tooltip.style.display = "block";
+          tooltip.style.left = e.clientX - rect.left + 10 + "px";
+          tooltip.style.top = e.clientY - rect.top + 10 + "px";
+          tooltip.style.backgroundColor = cellData[key].manual
+            ? "yellow"
+            : "rgba(255,255,255,0.9)";
+          tooltip.textContent = `(${cellData[key].coords.x}, ${cellData[key].coords.y})`;
+        } else {
+          tooltip.style.display = "none";
+        }
+      });
+      canvas.addEventListener("mouseleave", function () {
+        tooltip.style.display = "none";
+      });
+
+      dropdown.addEventListener("contextmenu", function (e) {
+        e.preventDefault();
+      });
+      canvas.addEventListener("contextmenu", function (e) {
+        e.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        const cell = getCellFromCoords(x, y);
+        if (!cell) return;
+        const { row, col } = cell;
+        const key = `${row}-${col}`;
+        currentDropdownCell = key;
+        dropdown.style.left = e.clientX - rect.left + "px";
+        dropdown.style.top = e.clientY - rect.top + "px";
+        dropdown.style.display = "block";
+      });
+      document.addEventListener("click", function (e) {
+        if (e.button !== 2) dropdown.style.display = "none";
+      });
+
+      setCoordsOption.addEventListener("click", function () {
+        dropdown.style.display = "none";
+        if (!cellData[currentDropdownCell]) {
+          alert("Debe seleccionar la celda (click izquierdo) primero.");
+          return;
+        }
+        modalOverlay.style.display = "flex";
+      });
+      saveCoordsBtn.addEventListener("click", function () {
+        const xVal = document.getElementById("coordX").value;
+        const yVal = document.getElementById("coordY").value;
+        cellData[currentDropdownCell].coords = {
+          x: Number(xVal),
+          y: Number(yVal),
+        };
+        cellData[currentDropdownCell].manual = true;
+        modalOverlay.style.display = "none";
+        document.getElementById("coordX").value = "";
+        document.getElementById("coordY").value = "";
+        recalcRelativeCoordinates();
+        draw();
+      });
+      cancelCoordsBtn.addEventListener("click", function () {
+        modalOverlay.style.display = "none";
+        document.getElementById("coordX").value = "";
+        document.getElementById("coordY").value = "";
+      });
+
+      growthSelect.addEventListener("change", function () {
+        const [gx, gy] = growthSelect.value.split(",").map(Number);
+        growthVector = { x: gx, y: gy };
+        saveState();
+        recalcRelativeCoordinates();
+      });
+
+      exportCoordsBtn.addEventListener("click", function () {
+        recalcRelativeCoordinates();
+        const cells = Object.keys(cellData).map((key) => ({
+          key,
+          order: cellData[key].order,
+          coords: cellData[key].coords,
+        }));
+        cells.sort((a, b) => a.order - b.order);
+        let output = "";
+        cells.forEach((item) => {
+          output += `Cuadro ${item.order}: (${item.coords.x}, ${item.coords.y})\n`;
+        });
+        const blob = new Blob([output], { type: "text/plain" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "coordenadas.txt";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      });
+
+      // Corrección en exportación de comandos: se intercambian y y z.
+      exportCommandsBtn.addEventListener("click", function () {
+        modalZOverlay.style.display = "flex";
+      });
+      saveZBtn.addEventListener("click", function () {
+        const zVal = Number(coordZExport.value);
+        recalcRelativeCoordinates();
+        const cells = Object.keys(cellData).map((key) => ({
+          key,
+          order: cellData[key].order,
+          coords: cellData[key].coords,
+        }));
+        cells.sort((a, b) => a.order - b.order);
+        let output = "";
+        cells.forEach((item) => {
+          // Ahora se usa zVal para la coordenada Y y la coordenada y de la celda para Z
+          output += `/setblock ${item.coords.y} ${zVal} ${item.coords.x} minecraft:iron_block\n`;
+        });
+        const blob = new Blob([output], { type: "text/plain" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "comandos.txt";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        modalZOverlay.style.display = "none";
+      });
+      cancelZBtn.addEventListener("click", function () {
+        modalZOverlay.style.display = "none";
+      });
+
+      exportStateBtn.addEventListener("click", function () {
+        const state = {
+          cellData,
+          gridCells,
+          showMap,
+          growthVector,
+        };
+        const blob = new Blob([JSON.stringify(state, null, 2)], {
+          type: "application/json",
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "estado.json";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      });
+
+      importStateBtn.addEventListener("click", function () {
+        importStateFile.click();
+      });
+      importStateFile.addEventListener("change", function (e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function (event) {
+          try {
+            const importedState = JSON.parse(event.target.result);
+            cellData = importedState.cellData || {};
+            gridCells = importedState.gridCells || 300;
+            showMap =
+              importedState.showMap !== undefined
+                ? importedState.showMap
+                : true;
+            growthVector = importedState.growthVector || { x: 1, y: 1 };
+            gridSizeInput.value = gridCells;
+            toggleMapBtn.textContent = showMap
+              ? "Ocultar mapa"
+              : "Mostrar mapa";
+            growthSelect.value = `${growthVector.x},${growthVector.y}`;
+            saveState();
+            draw();
+          } catch (error) {
+            alert(
+              "Error al importar el estado. Asegúrese de que el archivo es correcto."
+            );
+          }
+        };
+        reader.readAsText(file);
+      });
+    </script>
+  </body>
+</html>
