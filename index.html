@@ -57,7 +57,7 @@
         width: 60px;
         margin: 5px;
       }
-      /* Modal para solicitar la coordenada Z para exportar comandos */
+      /* Modal para solicitar rango Z y tipo de bloque para exportar comandos */
       #modalZOverlay {
         display: none;
         position: fixed;
@@ -76,7 +76,8 @@
         border-radius: 5px;
         min-width: 250px;
       }
-      #modalZ input {
+      #modalZ input,
+      #modalZ select {
         width: 60px;
         margin: 5px;
       }
@@ -132,6 +133,7 @@
         <select id="selectionMode">
           <option value="uno" selected>Uno</option>
           <option value="seguir">Seguir cursor</option>
+          <option value="linea">Línea</option>
         </select>
       </label>
     </div>
@@ -160,11 +162,26 @@
       </div>
     </div>
 
-    <!-- Modal para solicitar la coordenada Z para exportar comandos -->
+    <!-- Modal para solicitar rango Z y tipo de bloque para exportar comandos -->
     <div id="modalZOverlay">
       <div id="modalZ">
-        <h3>Valor para Z</h3>
-        <label>Z: <input type="number" id="coordZExport" value="0" /></label>
+        <h3>Exportar comandos</h3>
+        <label
+          >Z inicio: <input type="number" id="coordZStart" value="0"
+        /></label>
+        <label>Z fin: <input type="number" id="coordZEnd" value="0" /></label>
+        <br />
+        <label
+          >Tipo de bloque:
+          <select id="blockTypeSelect">
+            <option value="minecraft:iron_block" selected>
+              minecraft:iron_block
+            </option>
+            <option value="minecraft:smooth_stone">
+              minecraft:smooth_stone
+            </option>
+          </select>
+        </label>
         <br />
         <button id="saveZ">Exportar comandos</button>
         <button id="cancelZ">Cancelar</button>
@@ -199,11 +216,13 @@
       const saveCoordsBtn = document.getElementById("saveCoords");
       const cancelCoordsBtn = document.getElementById("cancelCoords");
       const tooltip = document.getElementById("tooltip");
-      // Modal para solicitar Z en exportar comandos
+      // Modal para solicitar rango Z y tipo de bloque
       const modalZOverlay = document.getElementById("modalZOverlay");
       const saveZBtn = document.getElementById("saveZ");
       const cancelZBtn = document.getElementById("cancelZ");
-      const coordZExport = document.getElementById("coordZExport");
+      const coordZStart = document.getElementById("coordZStart");
+      const coordZEnd = document.getElementById("coordZEnd");
+      const blockTypeSelect = document.getElementById("blockTypeSelect");
 
       // Variables de imagen y zoom
       let img = new Image();
@@ -221,8 +240,9 @@
       // Vector de crecimiento (por defecto 1,1)
       let growthVector = { x: 1, y: 1 };
 
-      // Variable para modo de selección continua ("seguir cursor")
-      let isSelecting = false;
+      // Variables para modos de selección
+      let isSelecting = false; // Para modo "seguir cursor"
+      let lineStart = null; // Para modo "linea"
 
       // Persistencia en localStorage (imagen no se incluye)
       function saveImageToLocalStorage(dataURL) {
@@ -277,7 +297,7 @@
         draw();
       }
 
-      // Recalcula las coordenadas relativas (celdas sin seteo manual) usando la celda inferior izquierda
+      // Recalcula las coordenadas relativas (para celdas sin seteo manual) usando la celda inferior izquierda
       function recalcRelativeCoordinates() {
         const bottomLeftKey = gridCells - 1 + "-0";
         let refCoord = { x: 0, y: 0 };
@@ -295,6 +315,30 @@
         }
         saveState();
         draw();
+      }
+
+      // Algoritmo de Bresenham para trazar línea entre dos celdas
+      function bresenhamLine(x0, y0, x1, y1) {
+        const cells = [];
+        const dx = Math.abs(x1 - x0);
+        const dy = Math.abs(y1 - y0);
+        const sx = x0 < x1 ? 1 : -1;
+        const sy = y0 < y1 ? 1 : -1;
+        let err = dx - dy;
+        while (true) {
+          cells.push({ row: y0, col: x0 });
+          if (x0 === x1 && y0 === y1) break;
+          const e2 = 2 * err;
+          if (e2 > -dy) {
+            err -= dy;
+            x0 += sx;
+          }
+          if (e2 < dx) {
+            err += dx;
+            y0 += sy;
+          }
+        }
+        return cells;
       }
 
       function draw() {
@@ -453,7 +497,7 @@
         draw();
       });
 
-      // Modo de selección según el select "selectionMode"
+      // Manejo del click en el canvas según el modo de selección
       canvas.addEventListener("click", function (e) {
         const rect = canvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
@@ -467,7 +511,6 @@
 
         if (mode === "seguir") {
           if (!isSelecting) {
-            // Primer click: inicia selección continua y selecciona la celda si no estaba
             isSelecting = true;
             if (!cellData[key]) {
               cellData[key] = {
@@ -479,7 +522,6 @@
               recalcRelativeCoordinates();
             }
           } else {
-            // Segundo click: termina la sesión de selección continua
             isSelecting = false;
             if (!cellData[key]) {
               cellData[key] = {
@@ -493,8 +535,43 @@
           }
           saveState();
           draw();
+        } else if (mode === "linea") {
+          if (!lineStart) {
+            lineStart = { row, col };
+            if (!cellData[key]) {
+              cellData[key] = {
+                order: Object.keys(cellData).length + 1,
+                coords: null,
+                manual: false,
+              };
+              orderList.push(key);
+              recalcRelativeCoordinates();
+            }
+          } else {
+            const lineCells = bresenhamLine(
+              lineStart.col,
+              lineStart.row,
+              col,
+              row
+            );
+            lineCells.forEach((pt) => {
+              const lineKey = `${pt.row}-${pt.col}`;
+              if (!cellData[lineKey]) {
+                cellData[lineKey] = {
+                  order: Object.keys(cellData).length + 1,
+                  coords: null,
+                  manual: false,
+                };
+                orderList.push(lineKey);
+              }
+            });
+            lineStart = null;
+            recalcRelativeCoordinates();
+            saveState();
+            draw();
+          }
         } else {
-          // Modo "uno": comportamiento normal
+          // Modo "uno"
           if (cellData[key]) {
             delete cellData[key];
             recalcOrders();
@@ -512,7 +589,7 @@
         }
       });
 
-      // En modo "seguir cursor", al mover el mouse se selecciona la celda si la sesión está activa
+      // En modo "seguir cursor", al mover el mouse se agrega la celda si la sesión está activa
       canvas.addEventListener("mousemove", function (e) {
         const rect = canvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
@@ -638,12 +715,14 @@
         URL.revokeObjectURL(url);
       });
 
-      // Corrección en exportación de comandos: se intercambian y y z.
+      // Exportación de comandos con rango de Z, con intercambio de coordenadas y selección de tipo de bloque
       exportCommandsBtn.addEventListener("click", function () {
         modalZOverlay.style.display = "flex";
       });
       saveZBtn.addEventListener("click", function () {
-        const zVal = Number(coordZExport.value);
+        const zStart = Number(coordZStart.value);
+        const zEnd = Number(coordZEnd.value);
+        const blockType = blockTypeSelect.value;
         recalcRelativeCoordinates();
         const cells = Object.keys(cellData).map((key) => ({
           key,
@@ -653,8 +732,14 @@
         cells.sort((a, b) => a.order - b.order);
         let output = "";
         cells.forEach((item) => {
-          // Ahora se usa zVal para la coordenada Y y la coordenada y de la celda para Z
-          output += `/setblock ${item.coords.y} ${zVal} ${item.coords.x} minecraft:iron_block\n`;
+          for (
+            let z = Math.min(zStart, zEnd);
+            z <= Math.max(zStart, zEnd);
+            z++
+          ) {
+            // Se genera comando usando: primer parámetro = item.coords.y, segundo = z, tercero = item.coords.x
+            output += `/setblock ${item.coords.y} ${z} ${item.coords.x} ${blockType}\n`;
+          }
         });
         const blob = new Blob([output], { type: "text/plain" });
         const url = URL.createObjectURL(blob);
